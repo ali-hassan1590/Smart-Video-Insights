@@ -1,6 +1,6 @@
 from django.urls import path
-from .views import TranscribeVideoView
+from .views import transcribe_video_template_view
 
 urlpatterns = [
-    path('transcribe-video/', TranscribeVideoView.as_view(), name='transcribe-video'),
+    path("transcribe/", transcribe_video_template_view, name="transcribe_video"),
 ]
