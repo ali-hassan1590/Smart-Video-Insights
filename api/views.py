@@ -235,7 +235,6 @@
 
 
 
-
 from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse
 from django.core.files.storage import default_storage
@@ -247,17 +246,16 @@ import json
 from transformers import pipeline
 from .forms import VideoUploadForm
 
+from keybert import KeyBERT
+import spacy
 
+# Device setup
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Using device: {device}")
 whisper_model = whisper.load_model("base", device=device)
 
-
-
 summarizer_device = 0 if torch.cuda.is_available() else -1
 summarizer = pipeline("summarization", model="facebook/bart-large-cnn", device=summarizer_device)
-
-
 
 
 @csrf_exempt
@@ -284,14 +282,12 @@ def transcribe_video_api_view(request):
                 "details": str(ffmpeg_error)
             }, status=500)
 
-        # Check if audio file exists and is not empty
         audio_full_path = default_storage.path(audio_path)
         if not os.path.exists(audio_full_path):
             return JsonResponse({"error": "Audio extraction failed: audio file not found."}, status=500)
         if os.path.getsize(audio_full_path) == 0:
             return JsonResponse({"error": "Audio extraction failed: audio file is empty."}, status=500)
 
-        # Now transcribe
         result_data = whisper_model.transcribe(audio_full_path)
 
         result = {
@@ -302,17 +298,14 @@ def transcribe_video_api_view(request):
 
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
-    
 
-    
+
 @csrf_exempt
 def summarize_text_api_view(request):
     if request.method != "POST":
         return JsonResponse({"error": "Only POST method is allowed."}, status=405)
 
     try:
-        print("Raw request body:", request.body)  # 👈 This will show you what was actually sent
-
         if not request.body:
             return JsonResponse({"error": "Empty request body."}, status=400)
 
@@ -325,6 +318,49 @@ def summarize_text_api_view(request):
         summary = summarizer(text, max_length=200, min_length=60, do_sample=False)
         summary_text = summary[0]['summary_text']
         return JsonResponse({"summary": summary_text}, status=200)
+
+    except json.JSONDecodeError as e:
+        return JsonResponse({"error": "Invalid JSON", "details": str(e)}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+def generate_tags_title_api_view(request):
+    if request.method != "POST":
+        return JsonResponse({"error": "Only POST method is allowed."}, status=405)
+
+    try:
+        if not request.body:
+            return JsonResponse({"error": "Empty request body."}, status=400)
+
+        data = json.loads(request.body.decode("utf-8"))
+        text = data.get("text", "").strip()
+
+        if not text:
+            return JsonResponse({"error": "No text provided for tag/title generation."}, status=400)
+
+        # Keyword tags using KeyBERT
+        kw_model = KeyBERT()
+        keywords = kw_model.extract_keywords(text, top_n=5)
+        keyword_tags = [kw[0] for kw in keywords]
+
+        # Named entities using spaCy
+        nlp = spacy.load("en_core_web_sm")
+        doc = nlp(text)
+        entity_tags = list(set([ent.text for ent in doc.ents]))
+
+        # Title generation using summarizer
+        title_summary = summarizer(text, max_length=30, min_length=5, do_sample=False)
+        title = title_summary[0]['summary_text']
+
+        return JsonResponse({
+            "tags": {
+                "keywords": keyword_tags,
+                "entities": entity_tags
+            },
+            "generated_title": title
+        }, status=200)
 
     except json.JSONDecodeError as e:
         return JsonResponse({"error": "Invalid JSON", "details": str(e)}, status=400)
